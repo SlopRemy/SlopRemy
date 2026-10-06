@@ -659,6 +659,7 @@
   .table-area {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -738,10 +739,13 @@
     color: var(--accent);
   }
 
+  /* Scrolls when other players' melds don't fit, e.g. on small screens. */
   .melds {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
     display: flex;
     flex-wrap: wrap;
     align-content: flex-start;
