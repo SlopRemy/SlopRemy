@@ -2,7 +2,7 @@
   import { untrack } from 'svelte'
   import { device, fullscreenSupported, toggleFullscreen } from '../../lib/device.svelte'
   import { errorText, t } from '../../lib/i18n.svelte'
-  import { arrangeByColor, arrangeByNumber, groupsFromSelection, moveTile, placeTiles, RACK_ROWS, type Layout } from '../../lib/rack'
+  import { arrangeByColor, arrangeByNumber, groupsFromSelection, moveTile, placeTiles, RACK_ROWS, rackWidth, type Layout } from '../../lib/rack'
   import { navigate } from '../../lib/router.svelte'
   import { load, save } from '../../lib/storage'
   import type { TableConnection } from '../../lib/table.svelte'
@@ -20,8 +20,8 @@
 
   let { conn, table }: { conn: TableConnection; table: TableState } = $props()
 
+  // Columns that fit on screen; the rack grows (and scrolls) past them when needed.
   const COLS = 16
-  const SLOTS = COLS * RACK_ROWS
 
   // ---- Layout ----
   // Sizes come from the board's measured box, which CSS keeps within the visible area
@@ -113,14 +113,16 @@
   const pendingJoker = $derived(round?.turn?.pending_joker != null && hand.some((t) => t.id === round!.turn!.pending_joker))
 
   // ---- Rack layout (saved on this device per table) ----
-  const rackKey = `remybun.rack.${untrack(() => table.code)}`
+  // "rack2": layouts saved before the rack could grow number their slots differently.
+  const rackKey = `remybun.rack2.${untrack(() => table.code)}`
   let saved = $state<Layout>(load<Layout>(rackKey, {}))
 
   // A saved layout that knows less than half the current tiles belongs to an earlier deal.
   const layout = $derived.by(() => {
     const known = rackIds.filter((id) => saved[id] !== undefined).length
-    return placeTiles(rackIds, known * 2 >= rackIds.length ? saved : {}, SLOTS)
+    return placeTiles(rackIds, known * 2 >= rackIds.length ? saved : {}, COLS)
   })
+  const rackCols = $derived(rackWidth(layout, COLS))
 
   // Keep the saved layout in step with tiles placed automatically (deal, draws, takes).
   $effect(() => {
@@ -145,7 +147,7 @@
   }
 
   // Selected tiles that touch on the rack form one meld each.
-  const groups = $derived(groupsFromSelection(layout, selected, COLS))
+  const groups = $derived(groupsFromSelection(layout, selected))
   const groupPoints = $derived(
     groups.map((g) => meldPoints(g.map((id) => byId.get(id)!).filter(Boolean), rules.max_jokers_per_meld)),
   )
@@ -439,7 +441,7 @@
       <Rack
         tiles={rackTiles}
         {layout}
-        cols={COLS}
+        cols={rackCols}
         tileHeight={tileH}
         {selected}
         highlighted={[...(taking?.ids ?? []), pendingJoker ? round!.turn!.pending_joker : null]}
@@ -778,6 +780,9 @@
   }
 
   .controls {
+    position: relative;
+    /* Above the rack's scroll box, which reaches up behind the controls when it scrolls. */
+    z-index: 1;
     display: flex;
     align-items: center;
     gap: 8px;

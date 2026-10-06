@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RACK_ROWS, type Layout } from '../../lib/rack'
+  import { colOf, RACK_ROWS, rowOf, slotOf, type Layout } from '../../lib/rack'
   import { receive, send } from '../../lib/transitions'
   import type { Tile as TileT } from '../../lib/types'
   import Tile from '../Tile.svelte'
@@ -26,6 +26,18 @@
   const slotY = (row: number) => pad + row * (rowHeight + 4)
 
   let rack: HTMLElement | undefined = $state()
+  let scroller: HTMLElement | undefined = $state()
+  let scrollerWidth = $state(0)
+  const rackWidth = $derived(pad * 2 + cols * tileWidth + (cols - 1) * gap)
+  // Only clip (and scroll) when needed: clipping would cut off lifted and dragged tiles.
+  const overflowing = $derived(rackWidth > scrollerWidth + 1)
+
+  // When the rack grows (e.g. tiles taken from the discard pile), show the new columns.
+  let shownCols = 0
+  $effect(() => {
+    if (scroller && cols > shownCols && shownCols > 0) scroller.scrollTo({ left: scroller.scrollWidth, behavior: 'smooth' })
+    shownCols = cols
+  })
 
   // Tap toggles selection; dragging moves the tile to another slot (swapping if taken).
   let drag = $state<{
@@ -70,7 +82,7 @@
     if (y < box.top - tileHeight || y > box.bottom + tileHeight) return null
     const c = Math.max(0, Math.min(cols - 1, col))
     const r = Math.max(0, Math.min(RACK_ROWS - 1, row))
-    return r * cols + c
+    return slotOf(r, c)
   }
 
   function keydown(e: KeyboardEvent, id: number) {
@@ -81,43 +93,58 @@
   }
 </script>
 
-<div
-  class="rack"
-  bind:this={rack}
-  style:--tile-h="{tileHeight}px"
-  style:width="{pad * 2 + cols * tileWidth + (cols - 1) * gap}px"
-  style:height="{pad * 2 + RACK_ROWS * rowHeight + 4}px"
->
-  {#each Array(RACK_ROWS) as _, row (row)}
-    <div class="ledge" style:top="{slotY(row) + tileHeight}px" style:height="{ledge}px"></div>
-  {/each}
+<!-- The rack scrolls sideways when it has grown wider than the screen. -->
+<div class="scroller" class:overflowing bind:this={scroller} bind:clientWidth={scrollerWidth}>
+  <div
+    class="rack"
+    bind:this={rack}
+    style:--tile-h="{tileHeight}px"
+    style:width="{rackWidth}px"
+    style:height="{pad * 2 + RACK_ROWS * rowHeight + 4}px"
+  >
+    {#each Array(RACK_ROWS) as _, row (row)}
+      <div class="ledge" style:top="{slotY(row) + tileHeight}px" style:height="{ledge}px"></div>
+    {/each}
 
-  {#each tiles as tile (tile.id)}
-    {@const slot = layout[tile.id] ?? 0}
-    {@const dragging = drag?.active && drag.id === tile.id}
-    <div
-      class="slot"
-      class:dragging
-      role="button"
-      tabindex="0"
-      aria-pressed={selected.includes(tile.id)}
-      style:left="{slotX(slot % cols)}px"
-      style:top="{slotY(Math.floor(slot / cols))}px"
-      style:transform={dragging ? `translate(${drag!.dx}px, ${drag!.dy}px)` : undefined}
-      onpointerdown={(e) => pointerdown(e, tile.id)}
-      onpointermove={pointermove}
-      onpointerup={pointerup}
-      onpointercancel={() => (drag = null)}
-      onkeydown={(e) => keydown(e, tile.id)}
-      in:receive={{ key: tile.id }}
-      out:send={{ key: tile.id }}
-    >
-      <Tile {tile} selected={selected.includes(tile.id)} highlight={highlighted.includes(tile.id)} />
-    </div>
-  {/each}
+    {#each tiles as tile (tile.id)}
+      {@const slot = layout[tile.id] ?? 0}
+      {@const dragging = drag?.active && drag.id === tile.id}
+      <div
+        class="slot"
+        class:dragging
+        role="button"
+        tabindex="0"
+        aria-pressed={selected.includes(tile.id)}
+        style:left="{slotX(colOf(slot))}px"
+        style:top="{slotY(rowOf(slot))}px"
+        style:transform={dragging ? `translate(${drag!.dx}px, ${drag!.dy}px)` : undefined}
+        onpointerdown={(e) => pointerdown(e, tile.id)}
+        onpointermove={pointermove}
+        onpointerup={pointerup}
+        onpointercancel={() => (drag = null)}
+        onkeydown={(e) => keydown(e, tile.id)}
+        in:receive={{ key: tile.id }}
+        out:send={{ key: tile.id }}
+      >
+        <Tile {tile} selected={selected.includes(tile.id)} highlight={highlighted.includes(tile.id)} />
+      </div>
+    {/each}
+  </div>
 </div>
 
 <style>
+  .scroller {
+    max-width: 100%;
+  }
+
+  /* Room above for lifted (selected) tiles and below for the shadow, which scrolling clips. */
+  .scroller.overflowing {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding: 14px 0 8px;
+    margin: -14px 0 -8px;
+  }
+
   .rack {
     position: relative;
     margin: 0 auto;
@@ -129,7 +156,8 @@
       inset 0 2px 0 rgb(255 255 255 / 0.35),
       inset 0 -3px 0 rgb(0 0 0 / 0.18),
       0 6px 16px rgb(0 0 0 / 0.45);
-    touch-action: none;
+    /* Swiping the rack itself scrolls it; tiles are dragged. */
+    touch-action: pan-x;
   }
 
   .ledge {
@@ -143,6 +171,7 @@
 
   .slot {
     position: absolute;
+    touch-action: none;
     cursor: grab;
     outline: none;
     transition:

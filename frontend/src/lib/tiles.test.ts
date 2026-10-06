@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { arrangeByColor, arrangeByNumber, groupsFromSelection, moveTile, packGroups, placeTiles } from './rack'
+import { arrangeByColor, arrangeByNumber, groupsFromSelection, moveTile, packGroups, placeTiles, rackWidth, slotOf } from './rack'
 import { meldPoints, sortByColor, sortByNumber } from './tiles'
 import type { Tile, TileColor } from './types'
 
@@ -50,13 +50,29 @@ describe('sorting', () => {
 
 describe('rack layout', () => {
   it('fills a new rack in order and keeps saved positions', () => {
-    expect(placeTiles([10, 11, 12], {}, 32)).toEqual({ 10: 0, 11: 1, 12: 2 })
-    expect(placeTiles([10, 11, 12], { 10: 5, 11: 9 }, 32)).toEqual({ 10: 5, 11: 9, 12: 31 })
+    expect(placeTiles([10, 11, 12], {}, 16)).toEqual({ 10: 0, 11: 1, 12: 2 })
+    expect(placeTiles([10, 11, 12], { 10: 5, 11: 9 }, 16)).toEqual({ 10: 5, 11: 9, 12: slotOf(1, 15) })
   })
 
   it('drops invalid or duplicate saved slots', () => {
-    expect(placeTiles([1, 2], { 1: 4, 2: 4 }, 32)).toEqual({ 1: 4, 2: 31 })
-    expect(placeTiles([1, 2], { 1: 99, 2: 3 }, 32)).toEqual({ 1: 31, 2: 3 })
+    expect(placeTiles([1, 2], { 1: 4, 2: 4 }, 16)).toEqual({ 1: 4, 2: slotOf(1, 15) })
+    expect(placeTiles([1, 2], { 1: slotOf(2, 0), 2: 3 }, 16)).toEqual({ 1: slotOf(1, 15), 2: 3 })
+  })
+
+  it('widens a new rack that is too small', () => {
+    const ids = Array.from({ length: 40 }, (_, i) => i)
+    const layout = placeTiles(ids, {}, 16)
+    expect(layout[19]).toBe(slotOf(0, 19))
+    expect(layout[20]).toBe(slotOf(1, 0))
+    expect(rackWidth(layout, 16)).toBe(20)
+  })
+
+  it('adds columns on the right when a full rack gets more tiles', () => {
+    const full = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [i, slotOf(Math.floor(i / 16), i % 16)]))
+    const layout = placeTiles([...Object.keys(full).map(Number), 100, 101, 102], full, 16)
+    expect([layout[100], layout[101], layout[102]]).toEqual([slotOf(1, 16), slotOf(1, 17), slotOf(0, 16)])
+    expect(rackWidth(layout, 16)).toBe(18)
+    expect(rackWidth({ 1: 0 }, 16)).toBe(16)
   })
 
   it('moves to an empty slot or swaps', () => {
@@ -65,14 +81,22 @@ describe('rack layout', () => {
   })
 
   it('groups selected tiles by adjacency within a row', () => {
-    const layout = { 1: 0, 2: 1, 3: 2, 4: 4, 5: 5, 6: 7, 7: 8 }
-    expect(groupsFromSelection(layout, [3, 1, 2, 4, 5], 16)).toEqual([[1, 2, 3], [4, 5]])
-    // slots 7 and 8 are in different rows when a row has 8 slots
-    expect(groupsFromSelection(layout, [6, 7], 8)).toEqual([[6], [7]])
+    const layout = { 1: 0, 2: 1, 3: 2, 4: 4, 5: 5, 6: slotOf(1, 0) - 1, 7: slotOf(1, 0) }
+    expect(groupsFromSelection(layout, [3, 1, 2, 4, 5])).toEqual([[1, 2, 3], [4, 5]])
+    // consecutive slot numbers, but the end of one row and the start of the next
+    expect(groupsFromSelection(layout, [6, 7])).toEqual([[6], [7]])
   })
 
   it('packs groups with gaps without splitting them across rows', () => {
-    expect(packGroups([[1, 2, 3], [4, 5], [6, 7, 8]], 8)).toEqual({ 1: 0, 2: 1, 3: 2, 4: 4, 5: 5, 6: 8, 7: 9, 8: 10 })
+    expect(packGroups([[1, 2, 3], [4, 5], [6, 7, 8]], 8)).toEqual({
+      1: 0, 2: 1, 3: 2, 4: 4, 5: 5, 6: slotOf(1, 0), 7: slotOf(1, 1), 8: slotOf(1, 2),
+    })
+  })
+
+  it('widens the rack when the tiles do not fit', () => {
+    const layout = packGroups(Array.from({ length: 40 }, (_, i) => [i]), 16)
+    expect(layout[39]).toBe(slotOf(1, 19))
+    expect(rackWidth(layout, 16)).toBe(20)
   })
 
   it('arranges by color runs and by number', () => {

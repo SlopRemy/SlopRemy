@@ -1,5 +1,7 @@
 // Layout of tiles on a player's rack: two rows of slots where tiles can sit anywhere,
-// with gaps. A layout maps tile id → slot index (row-major: slot = row * cols + col).
+// with gaps. A layout maps tile id → slot index. The rack is normally a fixed number of
+// columns wide but grows to the right when the tiles don't fit (e.g. after taking several
+// tiles from the discard pile), so a slot encodes row and column with a fixed stride.
 
 import { sortByColor, sortByNumber } from './tiles'
 import type { Tile } from './types'
@@ -8,38 +10,55 @@ export type Layout = Record<number, number>
 
 export const RACK_ROWS = 2
 
+/** More columns than a rack can ever need (106 tiles over two rows). */
+const STRIDE = 64
+
+export const slotOf = (row: number, col: number) => row * STRIDE + col
+export const rowOf = (slot: number) => Math.floor(slot / STRIDE)
+export const colOf = (slot: number) => slot % STRIDE
+
+/** Columns needed to show `layout`: at least `cols`, more when tiles sit further right. */
+export function rackWidth(layout: Layout, cols: number): number {
+  return Math.max(cols, ...Object.values(layout).map((slot) => colOf(slot) + 1))
+}
+
 /**
- * Gives every tile in `ids` a slot. Saved positions are kept when valid; tiles without one
- * fill the rack in order when the whole rack is new, otherwise they take the free slots from
- * the end of the bottom row (so a drawn tile doesn't land inside the player's groups).
+ * Gives every tile in `ids` a slot on a rack `cols` wide. Saved positions are kept when
+ * valid; tiles without one fill the rack in order when the whole rack is new, otherwise they
+ * take the free slots from the end of the bottom row (so a drawn tile doesn't land inside the
+ * player's groups). When no slot is free the rack gets new columns on the right.
  */
-export function placeTiles(ids: number[], saved: Layout, slots: number): Layout {
+export function placeTiles(ids: number[], saved: Layout, cols: number): Layout {
   const layout: Layout = {}
   const taken = new Set<number>()
 
   for (const id of ids) {
     const slot = saved[id]
-    if (slot !== undefined && slot >= 0 && slot < slots && !taken.has(slot)) {
+    if (Number.isInteger(slot) && slot >= 0 && rowOf(slot) < RACK_ROWS && !taken.has(slot)) {
       layout[id] = slot
       taken.add(slot)
     }
   }
 
-  const fresh = taken.size === 0
-  for (const id of ids) {
-    if (layout[id] !== undefined) continue
-    let slot = fresh ? 0 : slots - 1
-    while (taken.has(slot)) slot += fresh ? 1 : -1
-    if (slot < 0 || slot >= slots) slot = firstFree(taken, slots)
-    layout[id] = slot
-    taken.add(slot)
+  if (taken.size === 0) {
+    const width = Math.max(cols, Math.ceil(ids.length / RACK_ROWS))
+    ids.forEach((id, i) => (layout[id] = slotOf(Math.floor(i / width), i % width)))
+    return layout
   }
-  return layout
-}
 
-function firstFree(taken: Set<number>, slots: number): number {
-  for (let i = 0; i < slots; i++) if (!taken.has(i)) return i
-  return slots
+  const width = rackWidth(layout, cols)
+  const free: number[] = []
+  for (let row = RACK_ROWS - 1; row >= 0; row--)
+    for (let col = width - 1; col >= 0; col--) if (!taken.has(slotOf(row, col))) free.push(slotOf(row, col))
+
+  const missing = ids.filter((id) => layout[id] === undefined)
+  // What doesn't fit goes to new columns: along the bottom row first, then the row above.
+  const extra = Math.ceil(Math.max(0, missing.length - free.length) / RACK_ROWS)
+  missing.forEach((id, i) => {
+    const j = i - free.length
+    layout[id] = j < 0 ? free[i] : slotOf(RACK_ROWS - 1 - Math.floor(j / extra), width + (j % extra))
+  })
+  return layout
 }
 
 /** Moves a tile to `slot`, swapping with the tile already there. */
@@ -56,7 +75,7 @@ export function moveTile(layout: Layout, id: number, slot: number): Layout {
  * Splits the selected tiles into melds by how they sit on the rack: selected tiles that are
  * next to each other in the same row form one group.
  */
-export function groupsFromSelection(layout: Layout, selected: number[], cols: number): number[][] {
+export function groupsFromSelection(layout: Layout, selected: number[]): number[][] {
   const bySlot = selected
     .filter((id) => layout[id] !== undefined)
     .map((id) => ({ id, slot: layout[id] }))
@@ -65,7 +84,7 @@ export function groupsFromSelection(layout: Layout, selected: number[], cols: nu
   const groups: number[][] = []
   let prev = -2
   for (const { id, slot } of bySlot) {
-    const sameRow = Math.floor(slot / cols) === Math.floor(prev / cols)
+    const sameRow = rowOf(slot) === rowOf(prev)
     if (slot === prev + 1 && sameRow) groups[groups.length - 1].push(id)
     else groups.push([id])
     prev = slot
@@ -73,11 +92,15 @@ export function groupsFromSelection(layout: Layout, selected: number[], cols: nu
   return groups
 }
 
-/** Lays groups out row by row with a gap between them, never splitting a group across rows. */
+/**
+ * Lays groups out row by row with a gap between them, never splitting a group across rows.
+ * Too many groups for gaps: packs them tightly, then splits them; then widens the rack.
+ */
 export function packGroups(groups: number[][], cols: number, rows = RACK_ROWS): Layout {
-  const withGaps = pack(groups, cols, rows, 1)
-  // Too many groups for gaps: fall back to packing tightly.
-  return withGaps ?? pack(groups, cols, rows, 0) ?? pack([groups.flat()], cols, rows, 0, true)!
+  for (let width = cols; ; width++) {
+    const layout = pack(groups, width, rows, 1) ?? pack(groups, width, rows, 0) ?? pack([groups.flat()], width, rows, 0, true)
+    if (layout) return layout
+  }
 }
 
 function pack(groups: number[][], cols: number, rows: number, gap: number, split = false): Layout | null {
@@ -96,7 +119,7 @@ function pack(groups: number[][], cols: number, rows: number, gap: number, split
         col = 0
       }
       if (row >= rows) return null
-      layout[id] = row * cols + col++
+      layout[id] = slotOf(row, col++)
     }
     col += gap
   }
